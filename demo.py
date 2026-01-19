@@ -120,20 +120,21 @@ def forward_video(rgbs, framerate, model, args):
     device = rgbs.device
     assert(B==1)
 
-    grid_xy = utils.basic.gridcloud2d(1, H, W, norm=False, device='cuda:0').float() # 1,H*W,2
+    grid_xy = utils.basic.gridcloud2d(1, H, W, norm=False, device=device).float() # 1,H*W,2
     grid_xy = grid_xy.permute(0,2,1).reshape(1,1,2,H,W) # 1,1,2,H,W
 
-    torch.cuda.empty_cache()
+    if device.type == 'cuda':
+        torch.cuda.empty_cache()
     print('starting forward...')
     f_start_time = time.time()
 
     flows_e, visconf_maps_e, _, _ = \
         model.forward_sliding(rgbs[:, args.query_frame:], iters=args.inference_iters, sw=None, is_training=False)
-    traj_maps_e = flows_e.cuda() + grid_xy # B,Tf,2,H,W
+    traj_maps_e = flows_e.to(device) + grid_xy # B,Tf,2,H,W
     if args.query_frame > 0:
         backward_flows_e, backward_visconf_maps_e, _, _ = \
             model.forward_sliding(rgbs[:, :args.query_frame+1].flip([1]), iters=args.inference_iters, sw=None, is_training=False)
-        backward_traj_maps_e = backward_flows_e.cuda() + grid_xy # B,Tb,2,H,W, reversed
+        backward_traj_maps_e = backward_flows_e.to(device) + grid_xy # B,Tb,2,H,W, reversed
         backward_traj_maps_e = backward_traj_maps_e.flip([1])[:, :-1] # flip time and drop the overlapped frame
         backward_visconf_maps_e = backward_visconf_maps_e.flip([1])[:, :-1] # flip time and drop the overlapped frame
         traj_maps_e = torch.cat([backward_traj_maps_e, traj_maps_e], dim=1) # B,T,2,H,W
@@ -158,7 +159,7 @@ def forward_video(rgbs, framerate, model, args):
     utils.basic.mkdir(temp_dir)
     vis = []
 
-    frames = draw_pts_gpu(rgbs[0].to('cuda:0'), trajs_e[0], visconfs_e[0,:,:,1] > args.conf_thr,
+    frames = draw_pts_gpu(rgbs[0].to(device), trajs_e[0], visconfs_e[0,:,:,1] > args.conf_thr,
                           colors, rate=rate, bkg_opacity=args.bkg_opacity)
     print('frames', frames.shape)
 
@@ -179,7 +180,7 @@ def forward_video(rgbs, framerate, model, args):
     print('finished writing; %.2f seconds / %d frames; %d fps' % (ftime, T, round(T/ftime)))
         
     print('writing mp4')
-    os.system('/usr/bin/ffmpeg -y -hide_banner -loglevel error -f image2 -framerate %d -pattern_type glob -i "./%s/*.jpg" -c:v libx264 -crf 20 -pix_fmt yuv420p %s' % (framerate, temp_dir, rgb_out_f))
+    os.system('ffmpeg -y -hide_banner -loglevel error -f image2 -framerate %d -pattern_type glob -i "./%s/*.jpg" -c:v libx264 -crf 20 -pix_fmt yuv420p %s' % (framerate, temp_dir, rgb_out_f))
 
     # # flow vis
     # rgb_out_f = './flow_vis.mp4'
@@ -224,7 +225,11 @@ def run(model, args):
         model.load_state_dict(state_dict['model'], strict=True)
         print('loaded weights from', url)
 
-    model.cuda()
+    # Use CPU for compatibility (MPS has issues with adaptive pooling)
+    device = torch.device("cpu")
+    print("Using CPU")
+    
+    model.to(device)
     for n, p in model.named_parameters():
         p.requires_grad = False
     model.eval()
@@ -242,9 +247,9 @@ def run(model, args):
     rgbs = [cv2.resize(rgb, dsize=(W, H), interpolation=cv2.INTER_LINEAR) for rgb in rgbs]
     print('rgbs[0]', rgbs[0].shape)
 
-    # move to gpu
+    # move to device
     rgbs = [torch.from_numpy(rgb).permute(2,0,1) for rgb in rgbs]
-    rgbs = torch.stack(rgbs, dim=0).unsqueeze(0).float() # 1,T,C,H,W
+    rgbs = torch.stack(rgbs, dim=0).unsqueeze(0).float().to(device) # 1,T,C,H,W
     print('rgbs', rgbs.shape)
     
     with torch.no_grad():

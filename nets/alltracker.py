@@ -189,7 +189,7 @@ class Net(nn.Module):
             fmaps = []
             for t in range(0, T, fmaps_chunk_size):
                 images_chunk = images[:, t : t + fmaps_chunk_size]
-                images_chunk = images_chunk.cuda()
+                images_chunk = images_chunk.to(images_.device)
                 if self.use_basicencoder:
                     if self.full_split:
                         fmaps_chunk1 = self.fnet(images_chunk.reshape(-1, 3, H_pad, W_pad))
@@ -206,9 +206,6 @@ class Net(nn.Module):
                 fmaps.append(fmaps_chunk.reshape(B, -1, C, H8, W8))
             fmaps_ = torch.cat(fmaps, dim=1).reshape(-1, C, H8, W8)
         else:
-            if not is_training:
-                # sometimes we need to move things to cuda here
-                images_ = images_.cuda()
             if self.use_basicencoder:
                 if self.full_split:
                     fmaps1_ = self.fnet(images_)
